@@ -50,6 +50,10 @@ public:
         m_ultrawide_ui_correction->value() = (float)value;
         g_framework->request_save_config();
     }
+
+    std::optional<std::array<uint32_t, 2>> get_backbuffer_size() const {
+        return m_backbuffer_size;
+    }
 #endif
 
 private:

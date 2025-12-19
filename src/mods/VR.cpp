@@ -104,6 +104,12 @@ void VR::on_view_get_size(REManagedObject* scene_view, float* result) {
     }
 
     auto regenny_view = (regenny::via::SceneView*)scene_view;
+    
+    // Validate the SceneView pointer before accessing its members
+    if (IsBadReadPtr(regenny_view, sizeof(regenny::via::SceneView))) {
+        return;
+    }
+    
     auto window = regenny_view->window;
 
     static auto via_scene_view = sdk::find_type_definition("via.SceneView");
@@ -130,7 +136,8 @@ void VR::on_view_get_size(REManagedObject* scene_view, float* result) {
     auto wanted_height = 0.0f;
 
     // Set the window size, which will increase the size of the backbuffer
-    if (window != nullptr) {
+    // Validate the window pointer before accessing its members
+    if (window != nullptr && !IsBadReadPtr(window, sizeof(regenny::via::Window))) {
         static const auto is_gng = utility::get_module_path(utility::get_executable())->find("makaimura_GG_RE.exe") != std::string::npos;
 
         auto& window_width = is_gng ? *(uint32_t*)((uintptr_t)window + 0x48) : window->width;

@@ -1,40 +1,40 @@
 #include <utility/Module.hpp>
 #include <utility/Scan.hpp>
 
-#include <sdk/SceneManager.hpp>
 #include <sdk/MurmurHash.hpp>
-#include <sdk/Renderer.hpp>
-#include <sdk/resources/ShaderResource.hpp>
 #include <sdk/REGameObject.hpp>
+#include <sdk/Renderer.hpp>
+#include <sdk/SceneManager.hpp>
+#include <sdk/resources/ShaderResource.hpp>
 
-#include "VR.hpp"
 #include "Graphics.hpp"
+#include "VR.hpp"
 
 #if TDB_VER <= 49
-#include "sdk/regenny/re7/via/Window.hpp"
 #include "sdk/regenny/re7/via/SceneView.hpp"
+#include "sdk/regenny/re7/via/Window.hpp"
 #elif TDB_VER < 69
-#include "sdk/regenny/re3/via/Window.hpp"
 #include "sdk/regenny/re3/via/SceneView.hpp"
+#include "sdk/regenny/re3/via/Window.hpp"
 #elif TDB_VER == 69
-#include "sdk/regenny/re8/via/Window.hpp"
 #include "sdk/regenny/re8/via/SceneView.hpp"
+#include "sdk/regenny/re8/via/Window.hpp"
 #elif TDB_VER == 70
-#include "sdk/regenny/re2_tdb70/via/Window.hpp"
 #include "sdk/regenny/re2_tdb70/via/SceneView.hpp"
+#include "sdk/regenny/re2_tdb70/via/Window.hpp"
 #elif TDB_VER >= 71
 #ifdef SF6
-#include "sdk/regenny/sf6/via/Window.hpp"
 #include "sdk/regenny/sf6/via/SceneView.hpp"
+#include "sdk/regenny/sf6/via/Window.hpp"
 #elif defined(RE4)
-#include "sdk/regenny/re4/via/Window.hpp"
 #include "sdk/regenny/re4/via/SceneView.hpp"
+#include "sdk/regenny/re4/via/Window.hpp"
 #elif defined(DD2) || TDB_VER >= 74 // TODO: Actually make headers for TDB74
-#include "sdk/regenny/dd2/via/Window.hpp"
 #include "sdk/regenny/dd2/via/SceneView.hpp"
+#include "sdk/regenny/dd2/via/Window.hpp"
 #else
-#include "sdk/regenny/mhrise_tdb71/via/Window.hpp"
 #include "sdk/regenny/mhrise_tdb71/via/SceneView.hpp"
+#include "sdk/regenny/mhrise_tdb71/via/Window.hpp"
 #endif
 #endif
 
@@ -65,22 +65,22 @@ std::optional<std::string> Graphics::on_initialize() {
             auto raw_data = f->get_data_raw(nullptr, true);
             int64_t enum_data = 0;
 
-            switch(raytracing_enum->get_valuetype_size()) {
-                case 1:
-                    enum_data = (int64_t)*(int8_t*)raw_data;
-                    break;
-                case 2:
-                    enum_data = (int64_t)*(int16_t*)raw_data;
-                    break;
-                case 4:
-                    enum_data = (int64_t)*(int32_t*)raw_data;
-                    break;
-                case 8:
-                    enum_data = *(int64_t*)raw_data;
-                    break;
-                default:
-                    spdlog::error("Unknown enum size: {}", raytracing_enum->get_valuetype_size());
-                    break;
+            switch (raytracing_enum->get_valuetype_size()) {
+            case 1:
+                enum_data = (int64_t)*(int8_t*)raw_data;
+                break;
+            case 2:
+                enum_data = (int64_t)*(int16_t*)raw_data;
+                break;
+            case 4:
+                enum_data = (int64_t)*(int32_t*)raw_data;
+                break;
+            case 8:
+                enum_data = *(int64_t*)raw_data;
+                break;
+            default:
+                spdlog::error("Unknown enum size: {}", raytracing_enum->get_valuetype_size());
+                break;
             }
 
             if (enum_data < 0 || enum_data + 1 >= s_ray_trace_type.size()) {
@@ -114,105 +114,16 @@ std::optional<std::string> Graphics::on_initialize() {
 }
 
 void Graphics::on_lua_state_created(sol::state& lua) {
-    lua.new_usertype<Graphics>("REFGraphics",
-        "get", []() -> Graphics* { return Graphics::get().get(); },
-        "is_ultrawide_fix_enabled", &Graphics::is_ultrawide_fix_enabled
+    lua.new_usertype<Graphics>(
+        "REFGraphics", "get", []() -> Graphics* { return Graphics::get().get(); }, "is_ultrawide_fix_enabled",
+        &Graphics::is_ultrawide_fix_enabled
 #ifdef MHWILDS
         ,
         "get_mhwilds_ultrawide_correction_value", &Graphics::get_mhwilds_ultrawide_correction_value,
-        "set_mhwilds_ultrawide_correction_value", &Graphics::set_mhwilds_ultrawide_correction_value
+        "set_mhwilds_ultrawide_correction_value", &Graphics::set_mhwilds_ultrawide_correction_value,
+        "get_backbuffer_size", &Graphics::get_backbuffer_size
 #endif
     );
-
-#ifdef MHWILDS
-try {
-    lua.do_string(R"--delimiter--(local Statics = {}
-
-    function Statics.generate(typename, double_ended)
-        local double_ended = double_ended or false
-
-        local t = sdk.find_type_definition(typename)
-        if not t then return {} end
-
-        local fields = t:get_fields()
-        local enum = {}
-
-        for i, field in ipairs(fields) do
-            if field:is_static() then
-                local name = field:get_name()
-                local raw_value = field:get_data(nil)
-
-                log.info(name .. " = " .. tostring(raw_value))
-
-                enum[name] = raw_value
-
-                if double_ended then
-                    enum[raw_value] = name
-                end
-            end
-        end
-
-        return enum
-    end
-
-    local app_option_id = Statics.generate("app.Option.ID")
-    local ULTRAWIDE_UI_POS = app_option_id.ULTRAWIDE_UI_POS
-    local hook_enabled = false
-    local graphics = REFGraphics.get()
-    local last_known_correction_value = graphics:get_mhwilds_ultrawide_correction_value()
-    local first_time = true
-
-    local function enable_hook()
-        hook_enabled = true
-
-        sdk.hook(sdk.find_type_definition("app.savedata.cOptionParam"):get_method("getOptionValue(app.Option.ID)"),
-        function(args)
-            pcall(function()
-                thread.get_hook_storage()["option_id"] = sdk.to_int64(args[3])
-            end)
-        end,
-        function(retval)
-            pcall(function()
-                local option_id = thread.get_hook_storage()["option_id"] or 0
-                if (option_id == ULTRAWIDE_UI_POS) then
-                    local retval_as_int = sdk.to_int64(retval) & 0xFFFFFFFF
-
-                    -- Allow user to change value from within game menu
-                    if retval_as_int ~= last_known_correction_value and not first_time then
-                        graphics:set_mhwilds_ultrawide_correction_value(retval_as_int)
-                    else
-                        first_time = false
-                    end
-
-                    retval = sdk.to_ptr(graphics:get_mhwilds_ultrawide_correction_value())
-
-                    last_known_correction_value = retval_as_int
-                end
-            end)
-            return retval
-        end)
-
-        log.info("[Graphics] Hooked app.savedata.cOptionParam.getOptionValue(app.Option.ID)")
-    end
-
-    -- We use this to only hook if the ultrawide fix is enabled
-    re.on_frame(function()
-        if hook_enabled then
-            return
-        end
-
-        if graphics:is_ultrawide_fix_enabled() then
-            enable_hook()
-        end
-    end)
-    )--delimiter--"
-);
-} catch(const std::exception& e) {
-    spdlog::error("Error while trying to hook app.savedata.cOptionParam.getOptionValue(app.Option.ID): {}", e.what());
-} catch(...) {
-    spdlog::error("Error while trying to hook app.savedata.cOptionParam.getOptionValue(app.Option.ID): unknown error");
-}
-#endif
 }
 
 void Graphics::on_config_load(const utility::Config& cfg) {
@@ -276,8 +187,6 @@ void Graphics::on_draw_ui() {
             if (m_ultrawide_constrain_ui->value()) {
                 m_ultrawide_constrain_child_ui->draw("Ultrawide: Constrain Child UI to 16:9");
             }
-#else
-            m_ultrawide_ui_correction->draw("Ultrawide: UI Correction");
 #endif
             m_ultrawide_vertical_fov->draw("Ultrawide: Enable Vertical FOV");
             m_ultrawide_custom_fov->draw("Ultrawide: Override FOV");
@@ -310,10 +219,10 @@ void Graphics::on_draw_ui() {
             }
             m_ray_trace_type->draw("Ray Trace Type");
 
-            const auto clone_tooltip = 
-                    "Can draw another RT pass over the main RT pass. Useful for hybrid rendering.\n"
-                    "Example: Set Ray Trace Type to Pure and Ray Trace Clone Type to ASVGF. This adds RTGI to the path traced image.\n"
-                    "Path Space Filter is also another good alternative for RTGI but it costs more performance.\n";
+            const auto clone_tooltip =
+                "Can draw another RT pass over the main RT pass. Useful for hybrid rendering.\n"
+                "Example: Set Ray Trace Type to Pure and Ray Trace Clone Type to ASVGF. This adds RTGI to the path traced image.\n"
+                "Path Space Filter is also another good alternative for RTGI but it costs more performance.\n";
 
             m_ray_trace_clone_type_pre->draw("Ray Trace Clone Type Pre");
             if (ImGui::IsItemHovered()) {
@@ -324,12 +233,11 @@ void Graphics::on_draw_ui() {
             if (ImGui::IsItemHovered()) {
                 ImGui::SetTooltip(clone_tooltip);
             }
-            
+
             m_ray_trace_clone_type_true->draw("Ray Trace Clone Type True");
             if (ImGui::IsItemHovered()) {
-                const auto true_tooltip =
-                    "Uses a completely separate RT component instead of re-using the main RT component.\n"
-                    "Might crash or have other issues. Use with caution.\n";
+                const auto true_tooltip = "Uses a completely separate RT component instead of re-using the main RT component.\n"
+                                          "Might crash or have other issues. Use with caution.\n";
                 ImGui::SetTooltip(true_tooltip);
             }
 
@@ -347,8 +255,8 @@ void Graphics::on_draw_ui() {
     if (ImGui::TreeNode("Shader Playground")) {
         m_shader_playground->draw("Enable Shader Playground");
 
-        if (m_shader_playground->value()) {  
-            //for (size_t i = 0; i < m_replacement_shaders.size(); ++i) {
+        if (m_shader_playground->value()) {
+            // for (size_t i = 0; i < m_replacement_shaders.size(); ++i) {
             uint32_t j = 0;
             for (auto& intercepted : m_intercepted_shaders) {
                 uint32_t i = 0;
@@ -361,7 +269,8 @@ void Graphics::on_draw_ui() {
                 }
 
                 if (interception_node_open) {
-                    if (ImGui::InputText(std::format("Replace Shader", i).c_str(), intercepted.replace_with_name.data(), intercepted.replace_with_name.size())) {
+                    if (ImGui::InputText(std::format("Replace Shader", i).c_str(), intercepted.replace_with_name.data(),
+                            intercepted.replace_with_name.size())) {
                         intercepted.replace_with_hash = sdk::murmur_hash::calc32_as_utf8(intercepted.replace_with_name.data());
                     }
 
@@ -370,12 +279,14 @@ void Graphics::on_draw_ui() {
                         ImGui::PushID(std::format("Shader {}", i).c_str());
                         const auto node_open = ImGui::TreeNodeEx("");
                         ImGui::SameLine();
-                        if (ImGui::InputText(std::format("Custom Shader {}", i).c_str(), replacement.shader.data(), replacement.shader.size())) {
+                        if (ImGui::InputText(
+                                std::format("Custom Shader {}", i).c_str(), replacement.shader.data(), replacement.shader.size())) {
                             replacement.hash = sdk::murmur_hash::calc32_as_utf8(replacement.shader.data());
                         }
 
                         if (node_open) {
-                            ImGui::Combo("Dispatch Mode", (int*)&replacement.dispatch_mode, s_shader_dispatch_modes.data(), s_shader_dispatch_modes.size());
+                            ImGui::Combo("Dispatch Mode", (int*)&replacement.dispatch_mode, s_shader_dispatch_modes.data(),
+                                s_shader_dispatch_modes.size());
 
                             ImGui::InputInt("Thread Group X", (int32_t*)&replacement.thread_group_x);
                             ImGui::InputInt("Thread Group Y", (int32_t*)&replacement.thread_group_y);
@@ -487,71 +398,94 @@ void Graphics::fix_ui_element(REComponent* gui_element) {
         return;
     }
 
-    auto game_object = utility::re_component::get_game_object(gui_element);
+    try {
+        auto game_object = utility::re_component::get_game_object(gui_element);
 
-    if (game_object == nullptr || game_object->transform == nullptr) {
-        return;
-    }
+        if (game_object == nullptr || game_object->transform == nullptr) {
+            return;
+        }
 
-    const auto go_name = utility::re_string::get_view(game_object->name);
+        const auto go_name = utility::re_string::get_view(game_object->name);
 
-    if (go_name == L"BlackFade") {
-        return; // Don't do anything with the black fade, it should be taking over the whole screen
-    }
+        if (go_name == L"BlackFade") {
+            return; // Don't do anything with the black fade, it should be taking over the whole screen
+        }
 
-    const auto gui_component = utility::re_component::find<REComponent*>(game_object->transform, "via.gui.GUI");
+        const auto gui_component = utility::re_component::find<REComponent*>(game_object->transform, "via.gui.GUI");
 
-    if (gui_component == nullptr) {
-        return;
-    }
+        if (gui_component == nullptr) {
+            return;
+        }
 
-    static const auto gui_t = sdk::find_type_definition("via.gui.GUI");
-    static const auto view_t = sdk::find_type_definition("via.gui.View");
+        static const auto gui_t = sdk::find_type_definition("via.gui.GUI");
+        static const auto view_t = sdk::find_type_definition("via.gui.View");
 
-    if (gui_t == nullptr || view_t == nullptr) {
-        return;
-    }
+        if (gui_t == nullptr || view_t == nullptr) {
+            return;
+        }
 
-    static const auto set_res_adjust_scale = view_t->get_method("set_ResAdjustScale(via.gui.ResolutionAdjustScale)");
-    static const auto set_res_adjust_anchor = view_t->get_method("set_ResAdjustAnchor(via.gui.ResolutionAdjustAnchor)");
-    static const auto set_resolution_adjust = view_t->get_method("set_ResolutionAdjust(System.Boolean)");
-    static const auto get_view_type = view_t->get_method("get_ViewType");
+        static const auto set_res_adjust_scale = view_t->get_method("set_ResAdjustScale(via.gui.ResolutionAdjustScale)");
+        static const auto set_res_adjust_anchor = view_t->get_method("set_ResAdjustAnchor(via.gui.ResolutionAdjustAnchor)");
+        static const auto set_resolution_adjust = view_t->get_method("set_ResolutionAdjust(System.Boolean)");
+        static const auto get_view_type = view_t->get_method("get_ViewType");
 
-    if (set_res_adjust_scale == nullptr || set_res_adjust_anchor == nullptr || set_resolution_adjust == nullptr || get_view_type == nullptr) {
-        return;
-    }
+        if (set_res_adjust_scale == nullptr || set_res_adjust_anchor == nullptr || set_resolution_adjust == nullptr ||
+            get_view_type == nullptr) {
+            return;
+        }
 
-    static const auto get_view_method = gui_t->get_method("get_View");
+        static const auto get_view_method = gui_t->get_method("get_View");
 
-    if (get_view_method == nullptr) {
-        return;
-    }
+        if (get_view_method == nullptr) {
+            return;
+        }
 
-    const auto view = get_view_method->call<::REManagedObject*>(sdk::get_thread_context(), gui_component);
+        const auto view = get_view_method->call<::REManagedObject*>(sdk::get_thread_context(), gui_component);
 
-    if (view == nullptr) {
-        return;
-    }
+        if (view == nullptr) {
+            return;
+        }
 
-    const auto is_screen_view = get_view_type != nullptr && 
-                                get_view_type->call<int32_t>(sdk::get_thread_context(), view) == (int32_t)via::gui::ViewType::Screen;
+        const auto is_screen_view =
+            get_view_type != nullptr && get_view_type->call<int32_t>(sdk::get_thread_context(), view) == (int32_t)via::gui::ViewType::Screen;
 
-    if (is_screen_view) {
-        set_res_adjust_scale->call<void>(sdk::get_thread_context(), view, (int32_t)via::gui::ResolutionAdjustScale::FitSmallRatioAxis);
-        set_res_adjust_anchor->call<void>(sdk::get_thread_context(), view, (int32_t)via::gui::ResolutionAdjustAnchor::CenterCenter);
-        set_resolution_adjust->call<void>(sdk::get_thread_context(), view, true); // Causes the options to be applied/used
+        if (is_screen_view) {
+            try {
+                set_res_adjust_scale->call<void>(sdk::get_thread_context(), view, (int32_t)via::gui::ResolutionAdjustScale::FitSmallRatioAxis);
+                set_res_adjust_anchor->call<void>(sdk::get_thread_context(), view, (int32_t)via::gui::ResolutionAdjustAnchor::CenterCenter);
+                set_resolution_adjust->call<void>(sdk::get_thread_context(), view, true); // Causes the options to be applied/used
+            } catch (const std::exception& e) {
+                spdlog::warn("[Graphics] Failed to set UI scaling options: {}", e.what());
+                return;
+            } catch (...) {
+                spdlog::warn("[Graphics] Failed to set UI scaling options: unknown error");
+                return;
+            }
 
-        static const auto get_child = view_t->get_method("get_Child");
+            static const auto get_child = view_t->get_method("get_Child");
 
-        if (get_child != nullptr && m_ultrawide_constrain_child_ui->value()) {
-            const auto child = get_child->call<::REManagedObject*>(sdk::get_thread_context(), view);
+            if (get_child != nullptr && m_ultrawide_constrain_child_ui->value()) {
+                try {
+                    const auto child = get_child->call<::REManagedObject*>(sdk::get_thread_context(), view);
 
-            if (child != nullptr) {
-                set_res_adjust_scale->call<void>(sdk::get_thread_context(), child, (int32_t)via::gui::ResolutionAdjustScale::FitSmallRatioAxis);
-                set_res_adjust_anchor->call<void>(sdk::get_thread_context(), child, (int32_t)via::gui::ResolutionAdjustAnchor::CenterCenter);
-                set_resolution_adjust->call<void>(sdk::get_thread_context(), child, true); // Causes the options to be applied/used
+                    if (child != nullptr) {
+                        set_res_adjust_scale->call<void>(
+                            sdk::get_thread_context(), child, (int32_t)via::gui::ResolutionAdjustScale::FitSmallRatioAxis);
+                        set_res_adjust_anchor->call<void>(
+                            sdk::get_thread_context(), child, (int32_t)via::gui::ResolutionAdjustAnchor::CenterCenter);
+                        set_resolution_adjust->call<void>(sdk::get_thread_context(), child, true); // Causes the options to be applied/used
+                    }
+                } catch (const std::exception& e) {
+                    spdlog::warn("[Graphics] Failed to set child UI scaling options: {}", e.what());
+                } catch (...) {
+                    spdlog::warn("[Graphics] Failed to set child UI scaling options: unknown error");
+                }
             }
         }
+    } catch (const std::exception& e) {
+        spdlog::warn("[Graphics] Exception in fix_ui_element (MHWILDS TU4 compatibility): {}", e.what());
+    } catch (...) {
+        spdlog::warn("[Graphics] Unknown exception in fix_ui_element (MHWILDS TU4 compatibility)");
     }
 }
 
@@ -567,12 +501,14 @@ bool Graphics::on_pre_gui_draw_element(REComponent* gui_element, void* primitive
     // TODO: Check how this interacts with the other games, could be useful for them too.
 #if defined(SF6)
     fix_ui_element(gui_element);
+#elif defined(MHWILDS)
+    // For MHWILDS, the ultrawide fix works by setting DisplayType in do_ultrawide_fix()
+    // We do NOT call fix_ui_element here as that would constrain UI to 16:9
+    // The goal is to utilize full screen real estate for ultrawide displays
 #else
-#ifndef MHWILDS
     if (m_ultrawide_constrain_ui->value()) {
         fix_ui_element(gui_element);
     }
-#endif
 #endif
 
     auto game_object = utility::re_component::get_game_object(gui_element);
@@ -595,13 +531,13 @@ bool Graphics::on_pre_gui_draw_element(REComponent* gui_element, void* primitive
         const auto name = utility::re_game_object::get_name(game_object);
         const auto name_hash = utility::hash(name);
 
-        switch(name_hash) {
+        switch (name_hash) {
         // RE2/3?
         case "GUI_PillarBox"_fnv:
         case "GUIEventPillar"_fnv:
             game_object->shouldDraw = false;
             return false;
-        
+
         case "Gui_ui0211"_fnv: // Kunitsu-Gami
             if (letter_box_behavior_t != nullptr) {
                 auto letter_box_behavior = utility::re_component::find<REComponent*>(game_object->transform, letter_box_behavior_retype);
@@ -625,10 +561,10 @@ bool Graphics::on_pre_gui_draw_element(REComponent* gui_element, void* primitive
             game_object->shouldDraw = false;
             return false;
 
-        case "AcBackGround"_fnv: // Various screens that show the game background
+        case "AcBackGround"_fnv:   // Various screens that show the game background
         case "Gui_ArmouryTab"_fnv: // Typewriter storage
-        case "Gui_ui3030"_fnv: // in inventory
-        case "Gui_ui3040"_fnv: // just picked up an item
+        case "Gui_ui3030"_fnv:     // in inventory
+        case "Gui_ui3040"_fnv:     // just picked up an item
             if (game_object->shouldDraw && game_object->shouldUpdate) {
                 std::unique_lock _{m_re4.time_mtx};
                 m_re4.last_inventory_open = std::chrono::steady_clock::now();
@@ -648,6 +584,11 @@ void Graphics::on_view_get_size(REManagedObject* scene_view, float* result) {
 #if defined(SF6) || defined(DMC5) || TDB_VER >= 73
     if (m_ultrawide_fix->value()) {
         auto regenny_view = (regenny::via::SceneView*)scene_view;
+
+        if (regenny_view == nullptr) {
+            return;
+        }
+
         auto window = regenny_view->window;
 
         if (window != nullptr) {
@@ -666,6 +607,10 @@ void Graphics::on_view_get_size(REManagedObject* scene_view, float* result) {
     result[1] = (float)(*m_backbuffer_size)[1];
 #else
     auto regenny_view = (regenny::via::SceneView*)scene_view;
+
+    if (regenny_view == nullptr) {
+        return;
+    }
 
     regenny_view->size.w = (float)(*m_backbuffer_size)[0];
     regenny_view->size.h = (float)(*m_backbuffer_size)[1];
@@ -733,7 +678,24 @@ void Graphics::do_ultrawide_fix() {
         return;
     }
 
+#ifdef MHWILDS
+    // For MHWILDS, we only need to set the display type once
+    // The FOV manipulation is expensive and not needed for MHWILDS ultrawide support
+    static bool display_type_set = false;
+    static bool was_enabled = false;
+    
+    // Reset if the option was toggled
+    if (!was_enabled && m_ultrawide_fix->value()) {
+        display_type_set = false;
+    }
+    was_enabled = m_ultrawide_fix->value();
+    
+    if (display_type_set) {
+        return;
+    }
+#else
     set_ultrawide_fov(m_ultrawide_vertical_fov->value());
+#endif
 
 #if defined(RE4)
     {
@@ -765,13 +727,13 @@ void Graphics::do_ultrawide_fix() {
             const auto& size = graphics->m_backbuffer_size.value();
             const double ratio = static_cast<double>(size[0]) / static_cast<double>(size[1]);
             constexpr double epsilon = 0.01;
-            constexpr double _4_3   = 4.0 / 3.0;
-            constexpr double _16_9  = 16.0 / 9.0;
+            constexpr double _4_3 = 4.0 / 3.0;
+            constexpr double _16_9 = 16.0 / 9.0;
             constexpr double _16_10 = 16.0 / 10.0;
-            constexpr double _21_9  = 21.0 / 9.0;
-            constexpr double _32_9  = 32.0 / 9.0;
-            constexpr double _48_9  = 48.0 / 9.0;
-            
+            constexpr double _21_9 = 21.0 / 9.0;
+            constexpr double _32_9 = 32.0 / 9.0;
+            constexpr double _48_9 = 48.0 / 9.0;
+
             if (glm::abs(ratio - _4_3) < epsilon) {
                 display_type = via::DisplayType::Uniform4x3;
             } else if (glm::abs(ratio - _16_9) < epsilon) {
@@ -788,6 +750,11 @@ void Graphics::do_ultrawide_fix() {
         }
 
         set_display_type_method->call(sdk::get_thread_context(), main_view, display_type);
+        
+#ifdef MHWILDS
+        display_type_set = true;
+        spdlog::info("[Graphics] MHWILDS ultrawide display type set");
+#endif
     }
 }
 
@@ -900,7 +867,7 @@ void Graphics::set_ultrawide_fov(bool use_vertical_fov) {
 
     {
         std::scoped_lock _{m_fov_mutex};
-            
+
         if (!m_fov_map.contains(camera)) {
             m_fov_map[camera] = fov;
             utility::re_managed_object::add_ref(camera);
@@ -944,13 +911,13 @@ void Graphics::set_ultrawide_fov(bool use_vertical_fov) {
         if (get_aspect_method) {
             current_aspect_ratio = get_aspect_method->call<float>(sdk::get_thread_context(), camera);
         }
-        // Depending on the game, the FOV might have already automatically scaled up to "max_supported_aspect_ratio" by the time it reaches here
+        // Depending on the game, the FOV might have already automatically scaled up to "max_supported_aspect_ratio" by the time it reaches
+        // here
         const float fov_aspect_ratio = std::clamp(current_aspect_ratio, min_supported_aspect_ratio, max_supported_aspect_ratio);
 
         if (was_vertical_fov_enabled) {
             // Nothing to do, the FOV should already be correct under any aspect ratio in this case
-        }
-        else if (target_aspect_ratio >= min_supported_aspect_ratio) {
+        } else if (target_aspect_ratio >= min_supported_aspect_ratio) {
             const auto vfov = hor_to_ver_fov(fov, fov_aspect_ratio);
             const auto hfov_corrected = ver_to_hor_fov(vfov, target_aspect_ratio);
             set_fov_method->call(sdk::get_thread_context(), camera, is_vertical_fov_enabled ? vfov : hfov_corrected);
@@ -976,7 +943,8 @@ void Graphics::setup_shader_interception_hook() {
 
     // TESTING!!!
     if (sdk::renderer::ShaderResource::get_find_fn() != nullptr) {
-        m_find_pipeline_state_hook = std::make_unique<FunctionHook>((uintptr_t)sdk::renderer::ShaderResource::get_find_fn(), (uintptr_t)find_pipeline_state_hook);
+        m_find_pipeline_state_hook =
+            std::make_unique<FunctionHook>((uintptr_t)sdk::renderer::ShaderResource::get_find_fn(), (uintptr_t)find_pipeline_state_hook);
         if (!m_find_pipeline_state_hook->create()) {
             spdlog::error("[Graphics] Failed to create find pipeline state hook");
             return;
@@ -1014,8 +982,8 @@ void Graphics::setup_path_trace_hook() {
         return;
     }
 
-    spdlog::info("[Graphics] Took {}ms to search for RayTraceSettings", std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::high_resolution_clock::now() - start1).count());
-
+    spdlog::info("[Graphics] Took {}ms to search for RayTraceSettings",
+        std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::high_resolution_clock::now() - start1).count());
 
     spdlog::info("[Graphics] Found RayTraceSettings function @ {:x}", *fn);
 
@@ -1066,9 +1034,8 @@ void Graphics::setup_path_trace_hook() {
         return;
     }
 
-    const auto max_offset = std::max_element(offset_reference_counts.begin(), offset_reference_counts.end(), [](const auto& a, const auto& b) {
-        return a.second < b.second;
-    });
+    const auto max_offset = std::max_element(
+        offset_reference_counts.begin(), offset_reference_counts.end(), [](const auto& a, const auto& b) { return a.second < b.second; });
 
     if (max_offset == offset_reference_counts.end()) {
         spdlog::error("[Graphics] Failed to find most referenced RT type offset");
@@ -1100,7 +1067,8 @@ void Graphics::setup_path_trace_hook() {
         return;
     }
 
-    spdlog::info("[Graphics] Took {}ms to search for Bounce2", std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::high_resolution_clock::now() - start).count());
+    spdlog::info("[Graphics] Took {}ms to search for Bounce2",
+        std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::high_resolution_clock::now() - start).count());
 
     m_rt_draw_hook = std::make_unique<FunctionHook>(*draw_fn, (uintptr_t)rt_draw_hook);
 
@@ -1118,7 +1086,7 @@ void Graphics::setup_rt_component() {
     if (rt_t == nullptr) {
         return;
     }
-    
+
     const auto camera = sdk::get_primary_camera();
 
     if (camera == nullptr) {
@@ -1138,9 +1106,10 @@ void Graphics::setup_rt_component() {
     }
 
     auto rt_component = utility::re_component::find<REComponent>(game_object->transform, rt_t->get_type());
-    
+
     // Attempt to create the component if it doesn't exist
-    if (rt_component == nullptr || (m_ray_trace_always_recreate_rt_component->value() && m_rt_recreated_component.get() != (sdk::ManagedObject*)rt_component)) {
+    if (rt_component == nullptr ||
+        (m_ray_trace_always_recreate_rt_component->value() && m_rt_recreated_component.get() != (sdk::ManagedObject*)rt_component)) {
         if (rt_component != nullptr) {
             sdk::call_object_func_easy<void*>(rt_component, "destroy", rt_component);
         }
@@ -1222,7 +1191,7 @@ void Graphics::apply_ray_tracing_tweaks() {
             if (is_pure_pt && m_ray_trace_disable_raster_shadows->value()) {
                 if (get_DynamicShadowEnable != nullptr && set_DynamicShadowEnable != nullptr) {
                     const bool is_shadow_enabled = get_DynamicShadowEnable->call<bool>(context);
-                    
+
                     if (is_shadow_enabled) {
                         set_DynamicShadowEnable->call<void>(context, false);
                     }
@@ -1307,13 +1276,7 @@ void* Graphics::rt_draw_impl_hook(void* rt_impl, void* draw_context, void* r8, v
 
     graphics->m_within_rt_draw = true;
 
-    graphics->m_rt_draw_args = {
-        .impl = rt_impl,
-        .context = draw_context,
-        .r8 = r8,
-        .r9 = r9,
-        .unk = unk
-    };
+    graphics->m_rt_draw_args = {.impl = rt_impl, .context = draw_context, .r8 = r8, .r9 = r9, .unk = unk};
 
     if (graphics->m_ray_tracing_tweaks->value() && graphics->m_ray_trace_clone_type_pre->value() > 0) {
         ray_tracing_mode = graphics->m_ray_trace_clone_type_pre->value() - 1;
@@ -1338,7 +1301,7 @@ void* Graphics::rt_draw_impl_hook(void* rt_impl, void* draw_context, void* r8, v
 }
 
 sdk::renderer::PipelineState* Graphics::find_pipeline_state_hook(void* shader_resource, uint32_t murmur_hash, void* unk) {
-    static std::unordered_set<uint32_t> hashes {
+    static std::unordered_set<uint32_t> hashes{
         sdk::murmur_hash::calc32_as_utf8("PureNoLightSelectionBounce0Spp1"),
         sdk::murmur_hash::calc32_as_utf8("PureNoLightSelectionBounce0Spp2"),
         sdk::murmur_hash::calc32_as_utf8("PureNoLightSelectionBounce0Spp4"),
@@ -1423,8 +1386,8 @@ sdk::renderer::PipelineState* Graphics::find_pipeline_state_hook(void* shader_re
 
         graphics->m_pt_pipeline_resource = result;
         graphics->m_dxr_shader_resource = shader_resource;
-    } 
-    
+    }
+
     if (graphics->is_intercepted(murmur_hash)) {
         auto intercepted_shader = graphics->get_intercepted(murmur_hash);
 
@@ -1459,16 +1422,21 @@ sdk::renderer::PipelineState* Graphics::find_pipeline_state_hook(void* shader_re
 
                 switch (replacement_shader.dispatch_mode) {
                 case ShaderDispatchMode::Dispatch:
-                    (*(sdk::renderer::RenderContext**)graphics->m_rt_draw_args.context)->dispatch(replacement_shader.thread_group_x, replacement_shader.thread_group_y, thread_group_z, true);
+                    (*(sdk::renderer::RenderContext**)graphics->m_rt_draw_args.context)
+                        ->dispatch(replacement_shader.thread_group_x, replacement_shader.thread_group_y, thread_group_z, true);
                     break;
                 case ShaderDispatchMode::Dispatch32BitConstant:
-                    (*(sdk::renderer::RenderContext**)graphics->m_rt_draw_args.context)->dispatch_32bit_constant(replacement_shader.thread_group_x, replacement_shader.thread_group_y, thread_group_z, replacement_shader.constant, true);
+                    (*(sdk::renderer::RenderContext**)graphics->m_rt_draw_args.context)
+                        ->dispatch_32bit_constant(replacement_shader.thread_group_x, replacement_shader.thread_group_y, thread_group_z,
+                            replacement_shader.constant, true);
                     break;
                 case ShaderDispatchMode::DispatchRay:
-                    (*(sdk::renderer::RenderContext**)graphics->m_rt_draw_args.context)->dispatch_ray(replacement_shader.thread_group_x, replacement_shader.thread_group_y, thread_group_z, default_fence);
+                    (*(sdk::renderer::RenderContext**)graphics->m_rt_draw_args.context)
+                        ->dispatch_ray(replacement_shader.thread_group_x, replacement_shader.thread_group_y, thread_group_z, default_fence);
                     break;
                 default:
-                    (*(sdk::renderer::RenderContext**)graphics->m_rt_draw_args.context)->dispatch_ray(replacement_shader.thread_group_x, replacement_shader.thread_group_y, thread_group_z, default_fence);
+                    (*(sdk::renderer::RenderContext**)graphics->m_rt_draw_args.context)
+                        ->dispatch_ray(replacement_shader.thread_group_x, replacement_shader.thread_group_y, thread_group_z, default_fence);
                     break;
                 }
             }
