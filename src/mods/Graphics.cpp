@@ -157,6 +157,12 @@ try {
 
     local app_option_id = Statics.generate("app.Option.ID")
     local ULTRAWIDE_UI_POS = app_option_id.ULTRAWIDE_UI_POS
+    
+    if ULTRAWIDE_UI_POS == nil then
+        log.info("[Graphics] ULTRAWIDE_UI_POS not found in app.Option.ID, ultrawide UI correction hook disabled")
+        return
+    end
+    
     local hook_enabled = false
     local graphics = REFGraphics.get()
     local last_known_correction_value = graphics:get_mhwilds_ultrawide_correction_value()
@@ -165,7 +171,19 @@ try {
     local function enable_hook()
         hook_enabled = true
 
-        sdk.hook(sdk.find_type_definition("app.savedata.cOptionParam"):get_method("getOptionValue(app.Option.ID)"),
+        local option_param_type = sdk.find_type_definition("app.savedata.cOptionParam")
+        if option_param_type == nil then
+            log.info("[Graphics] app.savedata.cOptionParam not found, ultrawide UI correction hook disabled")
+            return
+        end
+        
+        local get_option_method = option_param_type:get_method("getOptionValue(app.Option.ID)")
+        if get_option_method == nil then
+            log.info("[Graphics] getOptionValue method not found, ultrawide UI correction hook disabled")
+            return
+        end
+
+        sdk.hook(get_option_method,
         function(args)
             pcall(function()
                 thread.get_hook_storage()["option_id"] = sdk.to_int64(args[3])
@@ -645,14 +663,23 @@ bool Graphics::on_pre_gui_draw_element(REComponent* gui_element, void* primitive
 }
 
 void Graphics::on_view_get_size(REManagedObject* scene_view, float* result) {
+    if (scene_view == nullptr) {
+        return;
+    }
+
 #if defined(SF6) || defined(DMC5) || TDB_VER >= 73
     if (m_ultrawide_fix->value()) {
         auto regenny_view = (regenny::via::SceneView*)scene_view;
         auto window = regenny_view->window;
 
         if (window != nullptr) {
-            window->borderless_size.w = (float)window->width;
-            window->borderless_size.h = (float)window->height;
+            // Only update if values have changed to avoid unnecessary writes
+            const float target_w = (float)window->width;
+            const float target_h = (float)window->height;
+            if (window->borderless_size.w != target_w || window->borderless_size.h != target_h) {
+                window->borderless_size.w = target_w;
+                window->borderless_size.h = target_h;
+            }
         }
     }
 #endif
@@ -747,6 +774,11 @@ void Graphics::do_ultrawide_fix() {
 #endif
 
     static auto via_scene_view = sdk::find_type_definition("via.SceneView");
+
+    if (via_scene_view == nullptr) {
+        return;
+    }
+
     static auto set_display_type_method = via_scene_view->get_method("set_DisplayType");
 
     auto main_view = sdk::get_main_view();
@@ -809,6 +841,11 @@ void Graphics::do_ultrawide_fov_restore(bool force) {
 #endif
 
     static auto via_camera = sdk::find_type_definition("via.Camera");
+
+    if (via_camera == nullptr) {
+        return;
+    }
+
     static auto set_fov_method = via_camera->get_method("set_FOV");
     static auto set_vertical_enable_method = via_camera->get_method("set_VerticalEnable");
 
@@ -862,6 +899,11 @@ void Graphics::set_ultrawide_fov(bool use_vertical_fov) {
 #endif
 
     static auto via_camera = sdk::find_type_definition("via.Camera");
+
+    if (via_camera == nullptr) {
+        return;
+    }
+
     static auto get_vertical_enable_method = via_camera->get_method("get_VerticalEnable");
     static auto set_vertical_enable_method = via_camera->get_method("set_VerticalEnable");
     static auto get_fov_method = via_camera->get_method("get_FOV");
