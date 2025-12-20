@@ -95,6 +95,11 @@ void add_ref(REManagedObject* object) {
 
     detail::resolve_add_ref();
 
+    if (add_ref_func == nullptr) {
+        spdlog::error("[REManagedObject] Cannot add_ref object - add_ref function not found");
+        return;
+    }
+
     //spdlog::info("Pushing: {} {} {:x}", (int32_t)object->referenceCount, utility::re_managed_object::get_type_definition(object)->get_full_name(), (uintptr_t)object);
 
 #if TDB_VER <= 49
@@ -114,6 +119,11 @@ void release(REManagedObject* object) {
     }
 
     detail::resolve_release();
+
+    if (release_func == nullptr) {
+        spdlog::error("[REManagedObject] Cannot release object - release function not found");
+        return;
+    }
 
     //spdlog::info("Popping: {} {} {:x}", (int32_t)object->referenceCount, utility::re_managed_object::get_type_definition(object)->get_full_name(), (uintptr_t)object);
 

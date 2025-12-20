@@ -57,6 +57,7 @@ private:
     void do_scope_tweaks(sdk::renderer::layer::Scene* layer);
     void do_ultrawide_fix();
     void do_ultrawide_fov_restore(bool force = false);
+    void restore_mhwilds_display_type();
     void set_ultrawide_fov(bool enable);
 
 #if TDB_VER >= 69
@@ -186,6 +187,8 @@ private:
 #ifdef MHWILDS
     const ModToggle::Ptr m_ultrawide_vertical_fov{ ModToggle::create(generate_name("UltrawideFixVerticalFOV_V2"), true) };
     const ModSlider::Ptr m_ultrawide_ui_correction{ ModSlider::create(generate_name("UltrawideUICorrection"), 0.0f, 100.0f, 100.0f) };
+    bool m_mhwilds_display_type_set{false};
+    bool m_mhwilds_ultrawide_active{false};
 #else
     const ModToggle::Ptr m_ultrawide_vertical_fov{ ModToggle::create(generate_name("UltrawideFixVerticalFOV_V2"), false) };
 #endif

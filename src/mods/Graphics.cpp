@@ -266,8 +266,15 @@ void Graphics::on_draw_ui() {
 
     ImGui::SetNextItemOpen(true, ImGuiCond_::ImGuiCond_Once);
     if (ImGui::TreeNode("Ultrawide/FOV Options")) {
-        if (m_ultrawide_fix->draw("Ultrawide/FOV/Aspect Ratio Fix") && m_ultrawide_fix->value() == false) {
-            do_ultrawide_fov_restore(true);
+        auto was_enabled = m_ultrawide_fix->value();
+        if (m_ultrawide_fix->draw("Ultrawide/FOV/Aspect Ratio Fix")) {
+            if (!was_enabled && m_ultrawide_fix->value()) {
+                // Just got enabled - apply the fix immediately
+                do_ultrawide_fix();
+            } else if (was_enabled && !m_ultrawide_fix->value()) {
+                // Just got disabled - restore FOV immediately
+                do_ultrawide_fov_restore(true);
+            }
         }
 
         if (m_ultrawide_fix->value()) {
@@ -729,6 +736,110 @@ void Graphics::do_ultrawide_fix() {
     }
 
     // No need to perform ultrawide fix if VR is running.
+    if (VR::get() != nullptr && VR::get()->is_hmd_active()) {
+        return;
+    }
+
+#ifdef MHWILDS
+    // For MHWILDS, we only need to set the display type once
+    // The FOV manipulation is expensive and not needed for MHWILDS ultrawide support
+    
+    // Special case: if the ultrawide fix is already enabled, but cache indicates
+    // it hasn't been applied yet, reset cache and continue
+    if (m_ultrawide_fix->value() && !m_mhwilds_display_type_set) {
+        spdlog::debug("[Graphics] MHWILDS ultrawide fix enabled, resetting cache for startup");
+        // Reset cache to allow the fix to be re-applied
+        m_mhwilds_display_type_set = false;
+    }
+    
+    // If the ultrawide fix is disabled and we have active state, restore it
+    if (m_mhwilds_ultrawide_active) {
+        spdlog::debug("[Graphics] MHWILDS ultrawide fix disabled, restoring display type");
+        restore_mhwilds_display_type();
+        m_mhwilds_ultrawide_active = false;
+        return;
+    }
+    
+    // If cache shows fix has been applied, exit early
+    if (m_mhwilds_display_type_set) {
+        return;
+    }
+#else
+    set_ultrawide_fov(m_ultrawide_vertical_fov->value());
+#endif
+
+#if defined(RE4)
+    {
+        std::shared_lock _{m_re4.time_mtx};
+
+        const auto now = std::chrono::steady_clock::now();
+        if (now - m_re4.last_inventory_open < std::chrono::milliseconds(100)) {
+            return;
+        }
+    }
+#endif
+
+    static auto via_scene_view = sdk::find_type_definition("via.SceneView");
+    if (via_scene_view == nullptr) {
+        return;
+    }
+
+    static auto set_display_type_method = via_scene_view->get_method("set_DisplayType");
+
+    auto main_view = sdk::get_main_view();
+    if (main_view == nullptr) {
+        return;
+    }
+
+    // This disables any kind of pillarboxing and letterboxing.
+    // This cannot be directly restored once applied.
+    if (set_display_type_method != nullptr) {
+        auto display_type = via::DisplayType::Uniform21x9;
+
+        if (m_backbuffer_size.has_value()) {
+            const auto& size = m_backbuffer_size.value();
+            const double ratio = static_cast<double>(size[0]) / static_cast<double>(size[1]);
+            constexpr double epsilon = 0.01;
+            constexpr double _4_3 = 4.0 / 3.0;
+            constexpr double _16_9 = 16.0 / 9.0;
+            constexpr double _16_10 = 16.0 / 10.0;
+            constexpr double _21_9 = 21.0 / 9.0;
+            constexpr double _32_9 = 32.0 / 9.0;
+            constexpr double _48_9 = 48.0 / 9.0;
+
+            if (glm::abs(ratio - _4_3) < epsilon) {
+                display_type = via::DisplayType::Uniform4x3;
+            } else if (glm::abs(ratio - _16_9) < epsilon) {
+                display_type = via::DisplayType::Uniform16x9;
+            } else if (glm::abs(ratio - _16_10) < epsilon) {
+                display_type = via::DisplayType::Uniform16x10;
+            } else if (glm::abs(ratio - _32_9) < epsilon) {
+                display_type = via::DisplayType::Uniform32x9;
+            } else if (glm::abs(ratio - _48_9) < epsilon) {
+                display_type = via::DisplayType::Uniform48x9;
+            } else {
+                display_type = via::DisplayType::Uniform21x9;
+            }
+        }
+
+        spdlog::debug("[Graphics] Setting MHWILDS ultrawide display type: {}", (int)display_type);
+        auto result = set_display_type_method->call(sdk::get_thread_context(), main_view, display_type);
+        
+        if (result.has_value()) {
+#ifdef MHWILDS
+            m_mhwilds_display_type_set = true;
+            m_mhwilds_ultrawide_active = true;
+            spdlog::info("[Graphics] MHWILDS ultrawide display type set successfully");
+#endif
+        } else {
+            spdlog::warn("[Graphics] Failed to set MHWILDS ultrawide display type");
+        }
+    } else {
+        spdlog::warn("[Graphics] set_DisplayType method not found in via.SceneView");
+    }
+}
+
+    // No need to perform ultrawide fix if VR is running.
     if (VR::get()->is_hmd_active()) {
         return;
     }
@@ -791,20 +902,125 @@ void Graphics::do_ultrawide_fix() {
     }
 }
 
+void Graphics::restore_mhwilds_display_type() {
+    static auto via_scene_view = sdk::find_type_definition("via.SceneView");
+    if (via_scene_view == nullptr) {
+        return;
+    }
+
+    static auto set_display_type_method = via_scene_view->get_method("set_DisplayType");
+    auto main_view = sdk::get_main_view();
+    
+    if (set_display_type_method != nullptr && main_view != nullptr) {
+        spdlog::debug("[Graphics] Restoring MHWILDS display type to original (Fit)");
+        // Restore to Fit display type which preserves original aspect ratio with black bars
+        auto result = set_display_type_method->call(sdk::get_thread_context(), main_view, via::DisplayType::Fit);
+        
+        if (result.has_value()) {
+            m_mhwilds_display_type_set = false;
+            spdlog::info("[Graphics] MHWILDS ultrawide display type restored successfully");
+        } else {
+            spdlog::warn("[Graphics] Failed to restore MHWILDS display type");
+        }
+    }
+}
+
 void Graphics::do_ultrawide_fov_restore(bool force) {
     if (!m_ultrawide_fix->value() && !force) {
         return;
     }
 
     // No need to perform ultrawide fix if VR is running.
-    if (VR::get()->is_hmd_active()) {
+    if (VR::get() != nullptr && VR::get()->is_hmd_active()) {
         return;
     }
 
+#ifdef MHWILDS
+    // For MHWILDS, restore display type to original when ultrawide fix is disabled
+    if (m_mhwilds_ultrawide_active) {
+        spdlog::debug("[Graphics] MHWILDS ultrawide fix disabled, restoring display type via FOV restore");
+        restore_mhwilds_display_type();
+        m_mhwilds_ultrawide_active = false;
+    }
+    return;
+#else
+    // Original FOV restoration logic for other games
 #if defined(RE4) // Don't restore the FOV if we've just opened the inventory
     const auto now = std::chrono::steady_clock::now();
     if (now - m_re4.last_inventory_open < std::chrono::milliseconds(100)) {
         return;
+    }
+#endif
+
+    static auto via_camera = sdk::find_type_definition("via.Camera");
+    static auto set_fov_method = via_camera->get_method("set_FOV");
+    static auto set_vertical_enable_method = via_camera->get_method("set_VerticalEnable");
+
+    std::scoped_lock _{m_fov_mutex};
+
+    if (set_fov_method != nullptr) {
+        for (auto it : m_fov_map) {
+            auto camera = it.first;
+            set_fov_method->call(sdk::get_thread_context(), camera, m_fov_map[camera]);
+            utility::re_managed_object::release(camera);
+        }
+        m_fov_map.clear();
+    }
+
+    if (set_vertical_enable_method != nullptr) {
+        for (auto it : m_vertical_fov_map) {
+            auto camera = it.first;
+            set_vertical_enable_method->call(sdk::get_thread_context(), camera, m_vertical_fov_map[camera]);
+            utility::re_managed_object::release(camera);
+        }
+        m_vertical_fov_map.clear();
+    }
+#endif
+
+#ifdef MHWILDS
+    // For MHWILDS, restore display type to original when ultrawide fix is disabled
+    if (m_ultrawide_fix->value()) {
+        // Only restore when the fix is being disabled (force=true or toggle off)
+        return;
+    }
+    
+    // Restore display type to original (letterboxed/pillarboxed) state
+    static auto via_scene_view = sdk::find_type_definition("via.SceneView");
+    if (via_scene_view == nullptr) {
+        return;
+    }
+
+    static auto set_display_type_method = via_scene_view->get_method("set_DisplayType");
+    auto main_view = sdk::get_main_view();
+    
+    if (set_display_type_method != nullptr && main_view != nullptr) {
+        spdlog::debug("[Graphics] Restoring MHWILDS display type to original");
+        // Restore to Fit display type which preserves original aspect ratio with black bars
+        set_display_type_method->call(sdk::get_thread_context(), main_view, via::DisplayType::Fit);
+    }
+#else
+    static auto via_camera = sdk::find_type_definition("via.Camera");
+    static auto set_fov_method = via_camera->get_method("set_FOV");
+    static auto set_vertical_enable_method = via_camera->get_method("set_VerticalEnable");
+
+    std::scoped_lock _{m_fov_mutex};
+
+    if (set_fov_method != nullptr) {
+        for (auto it : m_fov_map) {
+            auto camera = it.first;
+            set_fov_method->call(sdk::get_thread_context(), camera, m_fov_map[camera]);
+            utility::re_managed_object::release(camera);
+        }
+        m_fov_map.clear();
+    }
+
+    if (set_vertical_enable_method != nullptr) {
+        for (auto it : m_vertical_fov_map) {
+            auto camera = it.first;
+            set_vertical_enable_method->call(sdk::get_thread_context(), camera, m_vertical_fov_map[camera]);
+            utility::re_managed_object::release(camera);
+        }
+        m_vertical_fov_map.clear();
     }
 #endif
 
